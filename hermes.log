@@ -1,0 +1,6 @@
+23 |   const path = url.pathname.replace(/\\/g, '/').replace(/\\/+/g, '/');
+                                                                        ^
+error: Unterminated string literal
+    at /home/kostya/hermes-server/src/index.ts:23:68
+
+Bun v1.3.13 (Linux x64)
