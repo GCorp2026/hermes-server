@@ -9,7 +9,7 @@ export function corsHeaders() {
   };
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || "super-secret-jwt-token-with-at-least-32-characters-long";
+const JWT_SECRET = process.env.JWT_SECRET || "hermes-jwt-secret-change-me-in-production";
 
 export async function verifyAuth(req: Request) {
   const authHeader = req.headers.get("Authorization");
@@ -35,7 +35,7 @@ export async function getUserId(req: Request): Promise<string | null> {
   try {
     const secret = new TextEncoder().encode(JWT_SECRET);
     const { payload } = await jose.jwtVerify(token, secret);
-    return payload.sub as string;
+    return (payload.userId as string) || (payload.sub as string);
   } catch {
     return null;
   }
