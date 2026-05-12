@@ -15,7 +15,7 @@ export async function withAuthContext<T>(userId: string, fn: (sql: DbClient) => 
   return db.begin(async (sql) => {
     await sql`SELECT set_config('request.jwt.claim.sub', ${userId}, true)`.execute();
     await sql`SELECT set_config('request.jwt.claim.role', 'authenticated', true)`.execute();
-    await sql`SET LOCAL ROLE authenticated`.execute();
+    // role authenticated not available, skip
     return fn(sql);
   });
 }

@@ -1,7 +1,10 @@
 import { corsHeaders } from "./routes/auth";
 import * as emails from "./routes/emails";
 import * as contacts from "./routes/contacts";
-import { handleAuthMe, handleAuthRegister, handleAuthLogin, handlePromoteToAdmin, handleGetUserRoles, handleAdminListUsers, handleAdminSetRole, handleAdminDeleteUser, handleAdminBulkDelete, handleAdminBulkUpdate, handleAdminUpdateUser, handleAdminResetPassword, handleAdminListEmailAssignments, handleAdminCreateEmailAssignment, handleAdminDeleteEmailAssignment, handleGetWorkEmails, handleGetEmailHistory, handleDeleteEmailHistory, handleRefetchEmailContent, handleHermesEmailSend, handleProcessScheduled, handleResendWebhook, handleTranslate } from "./auth/routes";
+import { handleSalesProspectsSearch } from "./routes/sales-prospects";
+import { handleSalesProspectsEnrich } from "./routes/sales-prospects-enrich";
+import { handleAuthMe, handleAuthRegister, handleAuthLogin, handlePromoteToAdmin, handleGetUserRoles, handleAdminListUsers, handleAdminSetRole, handleAdminDeleteUser, handleAdminBulkDelete, handleAdminBulkUpdate, handleAdminUpdateUser, handleAdminResetPassword, handleAdminListEmailAssignments, handleAdminCreateEmailAssignment, handleAdminDeleteEmailAssignment, handleGetWorkEmails, handleGetEmailHistory, handleEmailHistoryRecent, handleDeleteEmailHistory, handleRefetchEmailContent, handleHermesEmailSend, handleProcessScheduled, handleResendWebhook, handleTranslate, handleValidateToken } from "./auth/routes";
+import { handleAdminEmails, handleAdminEmailSearch } from "./routes/admin-emails";
 import { db } from "./db";
 
 const PORT = parseInt(process.env.PORT || "3001");
@@ -34,7 +37,7 @@ async function route(req: Request): Promise<Response> {
       const body = await req.json();
       if (body.type === "email.received") {
         const { from, subject, text, html } = body.payload || {};
-        await db`INSERT INTO emails (sender, subject, body_text, body_html, status, received_at) VALUES (${from || ''}, ${subject || ''}, ${text || ''}, ${html || ''}, 'received', NOW())`.execute();
+        await db`INSERT INTO public.hermes_emails (from_address, subject, body, body_html, status, direction, to_addresses, created_at) VALUES (${from || ''}, ${subject || ''}, ${text || ''}, ${html || ''}, 'received', 'inbound', '{}', NOW())`.execute();
       }
       return json({ ok: true });
     } catch { return json({ error: "bad_request" }, 400); }
@@ -69,7 +72,7 @@ async function route(req: Request): Promise<Response> {
   // API routes
   if (resource === "api") {
     const pathParts = segments.slice(1);
-    if (pathParts[0] === "translate" && req.method === "POST") return handleTranslate(req);
+    if (pathParts[0] === "translate" && (req.method === "GET" || req.method === "POST")) return handleTranslate(req);
     if (pathParts.length < 1) return error("Invalid path");
 
     // Public auth routes (no token required)
@@ -84,12 +87,16 @@ async function route(req: Request): Promise<Response> {
     let userId: string;
     try { userId = verifyToken(token, process.env.JWT_SECRET || "hermes-dev-secret-2024").userId; } catch { return json({ error: "Invalid token" }, 401); }
 
+    // Admin email management (accessible as /api/admin/emails)
+    if (pathParts[0] === "admin" && pathParts[1] === "emails" && req.method === "GET") return handleAdminEmails(req, userId);
+    if (pathParts[0] === "admin" && pathParts[1] === "emails" && pathParts[2] === "search" && req.method === "POST") return handleAdminEmailSearch(req, userId);
+
     if (pathParts[0] === "auth") {
       const sub = pathParts[1];
 
       // Admin routes
       if (sub === "admin") {
-        const roles = await db`SELECT role FROM public.user_roles WHERE user_id = ${userId}`.execute();
+        const roles = await db`SELECT role FROM public.hermes_user_roles WHERE user_id = ${userId}`.execute();
         const isAdmin = roles.some((r: any) => r.role === "admin" || r.role === "super");
         if (!isAdmin) return json({ error: "Forbidden" }, 403);
         if (pathParts[2] === "users" && req.method === "GET") return handleAdminListUsers(req, token, userId);
@@ -107,23 +114,48 @@ async function route(req: Request): Promise<Response> {
 
       // User routes
       if (sub === "work-emails" && req.method === "GET") return handleGetWorkEmails(req, token, userId);
-      if (sub === "email-history" && req.method === "GET") return handleGetEmailHistory(req, token, userId);
+      if (sub === "email-history" && req.method === "GET") {
+        const url = new URL(req.url);
+        if (!url.searchParams.get("work_email_id")) {
+          return handleEmailHistoryRecent(req, token, userId);
+        }
+        return handleGetEmailHistory(req, token, userId);
+      }
       if (sub === "email-history" && pathParts[2] && pathParts[3] === "refetch" && req.method === "POST") return handleRefetchEmailContent(req, token, userId);
       if (sub === "email-history" && pathParts[2] && req.method === "DELETE") return handleDeleteEmailHistory(req, token, userId);
       if (sub === "email-send" && req.method === "POST") return handleHermesEmailSend(req, token, userId);
       if (sub === "user-roles" && req.method === "GET") {
         const targetUserId = pathParts[2] || userId;
-        const roles = await db`SELECT role FROM public.user_roles WHERE user_id = ${targetUserId}`.execute();
+        const roles = await db`SELECT role FROM public.hermes_user_roles WHERE user_id = ${targetUserId}`.execute();
         return json({ roles: roles.map((r: any) => r.role) });
       }
+      if (sub === "validate-token" && req.method === "POST") return handleValidateToken(req, token, userId);
       if (sub === "me" && req.method === "GET") return handleAuthMe(req, token, userId);
       if (sub === "promote-to-admin" && req.method === "POST") return handlePromoteToAdmin(req, token, userId);
       return error("Not found", 404);
     }
 
+    // email-history without /auth/ prefix (for frontend recent activity)
+    if (pathParts[0] === "email-history" && req.method === "GET") {
+      const url = new URL(req.url);
+      if (!url.searchParams.get("work_email_id")) {
+        return handleEmailHistoryRecent(req, token, userId);
+      }
+      return error("Not found", 404);
+    }
+
+    // Sales Prospects
+    if (pathParts[0] === "sales-prospects" && pathParts[1] === "search" && req.method === "POST") {
+      return handleSalesProspectsSearch(req);
+    }
+    if (pathParts[0] === "sales-prospects" && pathParts[1] === "enrich" && req.method === "POST") {
+      return handleSalesProspectsEnrich(req);
+    }
+
     // Contacts
     if (pathParts[0] === "contacts") {
       if (pathParts[1] === "industries" && req.method === "GET") return contacts.handleIndustries(req);
+      if (pathParts[1] === "users" && req.method === "GET") return contacts.handleContactUsers(req, userId);
       if (req.method === "GET") return contacts.handleContacts(req, userId);
       if (req.method === "POST") return contacts.createContact(req, userId);
       if (req.method === "PUT" && pathParts[1]) return contacts.updateContact(req, userId);
@@ -135,8 +167,15 @@ async function route(req: Request): Promise<Response> {
     if (pathParts[0] === "digest-preferences" && req.method === "PUT") return contacts.handleDigestPreferences(req);
 
     // Contact Interactions
-    if (pathParts[0] === "contact-interactions" && req.method === "GET") return contacts.handleContactInteractions(req);
-    if (pathParts[0] === "contact-interactions" && req.method === "POST") return contacts.createContactInteraction(req);
+    if (pathParts[0] === "contact-interactions" && req.method === "GET") return contacts.handleContactInteractions(req, userId);
+    if (pathParts[0] === "contact-interactions" && req.method === "POST") return contacts.createContactInteraction(req, userId);
+
+    // Contact Assignments (admin only)
+    if (pathParts[0] === "contact-assignments") {
+      if (req.method === "GET") return contacts.handleContactAssignments(req, userId);
+      if (req.method === "POST") return contacts.createContactAssignment(req, userId);
+      if (req.method === "DELETE" && pathParts[1]) return contacts.deleteContactAssignment(req, userId);
+    }
 
     // Industries (top-level)
     if (pathParts[0] === "industries" && req.method === "GET") return contacts.handleIndustries(req);

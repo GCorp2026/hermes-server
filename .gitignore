@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+*.bak
+*.orig
+*.rej
+reset_pass.ts
+*.ts.bak.*
+start.sh
+package-lock.json

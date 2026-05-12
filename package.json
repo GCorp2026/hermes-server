@@ -13,5 +13,9 @@
     "jose": "^5.2.0",
     "jsonwebtoken": "^9.0.3",
     "postgres": "^3.4.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   }
 }

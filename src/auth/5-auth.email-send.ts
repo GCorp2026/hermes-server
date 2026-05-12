@@ -21,7 +21,7 @@ export async function handleHermesEmailSend(req: Request, token: string, userId:
     }
 
     // Verify user owns this work email
-    const [workEmail] = await db`SELECT * FROM public.email_assignments WHERE id = ${work_email_id} AND user_id = ${userId}`.execute();
+    const [workEmail] = await db`SELECT * FROM public.hermes_work_emails WHERE id = ${work_email_id} AND user_id = ${userId}`.execute();
     if (!workEmail) {
       return json({ error: 'Work email not found or unauthorized' }, 403);
     }
@@ -44,8 +44,8 @@ export async function handleHermesEmailSend(req: Request, token: string, userId:
 
     // Build from address
     const fromAddress = workEmail.display_name
-      ? `${workEmail.display_name} <${workEmail.work_email || workEmail.email_address}>`
-      : (workEmail.work_email || workEmail.email_address);
+      ? `${workEmail.display_name} <${workEmail.work_email || workEmail.work_email}>`
+      : (workEmail.work_email || workEmail.work_email);
 
     const resendPayload: Record<string, unknown> = {
       from: fromAddress,
@@ -66,12 +66,12 @@ export async function handleHermesEmailSend(req: Request, token: string, userId:
     const resendData = await resendRes.json();
 
     // Store in email_history
-    await db`INSERT INTO public.email_history (id, work_email_id, resend_email_id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, subject, content, html_content, status, error_message, attachments, created_at)
-      VALUES (gen_random_uuid(), ${work_email_id}, ${resendData.id || null}, 'sent', ${workEmail.work_email || workEmail.email_address}, ${toAddresses}, ${ccAddresses}, ${bccAddresses}, ${subject}, ${content || null}, ${html_content || null}, ${resendRes.ok ? 'sent' : 'failed'}, ${resendRes.ok ? null : JSON.stringify(resendData)}, ${attachmentPaths}, NOW())`.execute();
+    await db`INSERT INTO public.hermes_email_history (id, work_email_id, resend_email_id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, subject, content, html_content, status, error_message, attachments, created_at)
+      VALUES (gen_random_uuid(), ${work_email_id}, ${resendData.id || null}, 'sent', ${workEmail.work_email || workEmail.work_email}, ${toAddresses}, ${ccAddresses}, ${bccAddresses}, ${subject}, ${content || null}, ${html_content || null}, ${resendRes.ok ? 'sent' : 'failed'}, ${resendRes.ok ? null : JSON.stringify(resendData)}, ${attachmentPaths}, NOW())`.execute();
 
-    // Also store in public.emails so it appears in the admin panel
-    await db`INSERT INTO public.emails (id, user_id, from_address, to_addresses, subject, body, body_html, status, direction, work_email_id, resend_email_id, cc_addresses, bcc_addresses, error_message, attachments, last_event, created_at, updated_at)
-      VALUES (gen_random_uuid(), ${userId}, ${workEmail.work_email || workEmail.email_address}, ${toAddresses}, ${subject}, ${content || null}, ${html_content || null}, ${resendRes.ok ? 'sent' : 'failed'}, 'outbound', ${work_email_id}, ${resendData.id || null}, ${ccAddresses}, ${bccAddresses}, ${resendRes.ok ? null : JSON.stringify(resendData)}, ${attachmentPaths}, NULL, NOW(), NOW())`.execute();
+    // Also store in public.hermes_emails so it appears in the admin panel
+    await db`INSERT INTO public.hermes_emails (id, user_id, from_address, to_addresses, subject, body, body_html, status, direction, work_email_id, resend_email_id, cc_addresses, bcc_addresses, error_message, attachments, last_event, created_at, updated_at)
+      VALUES (gen_random_uuid(), ${userId}, ${workEmail.work_email || workEmail.work_email}, ${toAddresses}, ${subject}, ${content || null}, ${html_content || null}, ${resendRes.ok ? 'sent' : 'failed'}, 'outbound', ${work_email_id}, ${resendData.id || null}, ${ccAddresses}, ${bccAddresses}, ${resendRes.ok ? null : JSON.stringify(resendData)}, ${attachmentPaths}, NULL, NOW(), NOW())`.execute();
 
     if (!resendRes.ok) {
       return json({ error: 'Failed to send email', details: resendData }, 500);
@@ -95,7 +95,7 @@ export async function handleProcessScheduled(req: Request): Promise<Response> {
 
     const results = [];
     for (const scheduled of pending) {
-      const [workEmail] = await db`SELECT * FROM public.email_assignments WHERE id = ${scheduled.work_email_id}`.execute();
+      const [workEmail] = await db`SELECT * FROM public.hermes_work_emails WHERE id = ${scheduled.work_email_id}`.execute();
       if (!workEmail) {
         await db`UPDATE scheduled_emails SET status = 'failed', error_message = 'Work email not found' WHERE id = ${scheduled.id}`.execute();
         results.push({ id: scheduled.id, status: 'failed', reason: 'no work email' });
@@ -103,8 +103,8 @@ export async function handleProcessScheduled(req: Request): Promise<Response> {
       }
 
       const fromAddress = workEmail.display_name
-        ? `${workEmail.display_name} <${workEmail.work_email || workEmail.email_address}>`
-        : (workEmail.work_email || workEmail.email_address);
+        ? `${workEmail.display_name} <${workEmail.work_email || workEmail.work_email}>`
+        : (workEmail.work_email || workEmail.work_email);
 
       const resendPayload: Record<string, unknown> = {
         from: fromAddress,
@@ -126,11 +126,11 @@ export async function handleProcessScheduled(req: Request): Promise<Response> {
 
         if (resendRes.ok) {
           await db`UPDATE scheduled_emails SET status = 'sent', sent_at = NOW() WHERE id = ${scheduled.id}`.execute();
-          await db`INSERT INTO public.email_history (id, work_email_id, resend_email_id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, subject, content, html_content, status, attachments, created_at)
-            VALUES (gen_random_uuid(), ${scheduled.work_email_id}, ${resendData.id || null}, 'sent', ${workEmail.work_email || workEmail.email_address}, ${scheduled.to_addresses}, ${scheduled.cc_addresses}, ${scheduled.bcc_addresses}, ${scheduled.subject}, ${scheduled.content}, ${scheduled.html_content}, 'sent', ${scheduled.attachments}, NOW())`.execute();
-          // Also store in public.emails so it appears in the admin panel
-          await db`INSERT INTO public.emails (id, user_id, from_address, to_addresses, subject, body, body_html, status, direction, work_email_id, resend_email_id, cc_addresses, bcc_addresses, error_message, attachments, last_event, created_at, updated_at)
-            VALUES (gen_random_uuid(), ${workEmail.user_id}, ${workEmail.work_email || workEmail.email_address}, ${scheduled.to_addresses}, ${scheduled.subject}, ${scheduled.content}, ${scheduled.html_content}, 'sent', 'outbound', ${scheduled.work_email_id}, ${resendData.id || null}, ${scheduled.cc_addresses}, ${scheduled.bcc_addresses}, NULL, ${scheduled.attachments}, NULL, NOW(), NOW())`.execute();
+          await db`INSERT INTO public.hermes_email_history (id, work_email_id, resend_email_id, direction, from_address, to_addresses, cc_addresses, bcc_addresses, subject, content, html_content, status, attachments, created_at)
+            VALUES (gen_random_uuid(), ${scheduled.work_email_id}, ${resendData.id || null}, 'sent', ${workEmail.work_email || workEmail.work_email}, ${scheduled.to_addresses}, ${scheduled.cc_addresses}, ${scheduled.bcc_addresses}, ${scheduled.subject}, ${scheduled.content}, ${scheduled.html_content}, 'sent', ${scheduled.attachments}, NOW())`.execute();
+          // Also store in public.hermes_emails so it appears in the admin panel
+          await db`INSERT INTO public.hermes_emails (id, user_id, from_address, to_addresses, subject, body, body_html, status, direction, work_email_id, resend_email_id, cc_addresses, bcc_addresses, error_message, attachments, last_event, created_at, updated_at)
+            VALUES (gen_random_uuid(), ${workEmail.user_id}, ${workEmail.work_email || workEmail.work_email}, ${scheduled.to_addresses}, ${scheduled.subject}, ${scheduled.content}, ${scheduled.html_content}, 'sent', 'outbound', ${scheduled.work_email_id}, ${resendData.id || null}, ${scheduled.cc_addresses}, ${scheduled.bcc_addresses}, NULL, ${scheduled.attachments}, NULL, NOW(), NOW())`.execute();
           results.push({ id: scheduled.id, status: 'sent' });
         } else {
           await db`UPDATE scheduled_emails SET status = 'failed', error_message = ${JSON.stringify(resendData)} WHERE id = ${scheduled.id}`.execute();
@@ -172,9 +172,9 @@ export async function handleResendWebhook(req: Request): Promise<Response> {
     }
 
     if (status) {
-      await db`UPDATE email_history SET last_event = ${lastEvent}, status = ${status} WHERE resend_email_id = ${emailId}`.execute();
+      await db`UPDATE public.hermes_email_history SET last_event = ${lastEvent}, status = ${status} WHERE resend_email_id = ${emailId}`.execute();
     } else if (lastEvent) {
-      await db`UPDATE email_history SET last_event = ${lastEvent} WHERE resend_email_id = ${emailId}`.execute();
+      await db`UPDATE public.hermes_email_history SET last_event = ${lastEvent} WHERE resend_email_id = ${emailId}`.execute();
     }
 
     if (type === 'email.received') {
@@ -194,17 +194,17 @@ export async function handleResendWebhook(req: Request): Promise<Response> {
 
       if (fromAddress && matchAddresses.length) {
         const [workEmail] = await db`
-          SELECT id, user_id FROM public.email_assignments
-          WHERE lower(coalesce(work_email, email_address)) = ANY(${matchAddresses})
-             OR lower(email_address) = ANY(${matchAddresses})
+          SELECT id, user_id FROM public.hermes_work_emails
+          WHERE lower(work_email) = ANY(${matchAddresses})
+             OR lower(work_email) = ANY(${matchAddresses})
           LIMIT 1
         `.execute();
         if (workEmail) {
-          await db`INSERT INTO public.email_history (id, work_email_id, resend_email_id, direction, from_address, to_addresses, subject, content, html_content, status, created_at)
+          await db`INSERT INTO public.hermes_email_history (id, work_email_id, resend_email_id, direction, from_address, to_addresses, subject, content, html_content, status, created_at)
             VALUES (gen_random_uuid(), ${workEmail.id}, ${emailId}, 'received', ${fromAddress}, ${matchAddresses}, ${data.subject || '(no subject)'}, ${data.text || data.text_body || null}, ${data.html || data.html_body || null}, 'received', NOW())
             ON CONFLICT DO NOTHING`.execute();
-          // Also store in public.emails so it appears in the admin panel
-          await db`INSERT INTO public.emails (id, user_id, from_address, to_addresses, subject, body, body_html, status, direction, work_email_id, resend_email_id, cc_addresses, bcc_addresses, error_message, attachments, last_event, created_at, updated_at)
+          // Also store in public.hermes_emails so it appears in the admin panel
+          await db`INSERT INTO public.hermes_emails (id, user_id, from_address, to_addresses, subject, body, body_html, status, direction, work_email_id, resend_email_id, cc_addresses, bcc_addresses, error_message, attachments, last_event, created_at, updated_at)
             VALUES (gen_random_uuid(), ${workEmail.user_id}, ${fromAddress}, ${matchAddresses}, ${data.subject || '(no subject)'}, ${data.text || data.text_body || null}, ${data.html || data.html_body || null}, 'received', 'inbound', ${workEmail.id}, ${emailId}, '{}', '{}', NULL, '{}', NULL, NOW(), NOW())
             ON CONFLICT DO NOTHING`.execute();
         }
