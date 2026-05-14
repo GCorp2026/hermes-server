@@ -133,10 +133,10 @@ export async function updateContact(req: Request, authenticatedUserId?: string) 
         notes = COALESCE(${notes}, notes),
         updated_at = NOW()
       WHERE id = ${id}
-      AND (${userIsAdmin} = true OR EXISTS(
-        SELECT 1 FROM public.hermes_contact_assignments ca
-        WHERE ca.contact_id = ${id} AND ca.assigned_to = ${userId}
-      ))
+      AND (${userIsAdmin} = true
+        OR NOT EXISTS(SELECT 1 FROM public.hermes_contact_assignments WHERE contact_id = ${id})
+        OR EXISTS(SELECT 1 FROM public.hermes_contact_assignments WHERE contact_id = ${id} AND assigned_to = ${userId})
+      )
       RETURNING *
     `.execute();
     return json(row || null);
@@ -406,8 +406,8 @@ export async function createContactAssignment(req: Request, authenticatedUserId?
     INSERT INTO public.hermes_contact_assignments (contact_id, assigned_to, assigned_by, assignment_type, notes)
     VALUES (${contact_id}, ${assigned_to}, ${userId}, ${assignment_type || 'primary'}, ${notes || null})
     ON CONFLICT (contact_id, assigned_to) DO UPDATE SET
-      assignment_type = COALESCE(${assignment_type}, hermes_contact_assignments.assignment_type),
-      notes = COALESCE(${notes}, hermes_contact_assignments.notes),
+      assignment_type = COALESCE(${assignment_type ?? null}, hermes_contact_assignments.assignment_type),
+      notes = COALESCE(${notes ?? null}, hermes_contact_assignments.notes),
       updated_at = NOW()
     RETURNING *
   `.execute();
